@@ -1431,7 +1431,12 @@ public abstract class SquidDatabase {
      * @return a {@link ISQLitePreparedStatement} object representing the compiled SQL
      */
     public ISQLitePreparedStatement prepareStatement(String sql) {
-        return getDatabase().prepareStatement(sql);
+        acquireNonExclusiveLock();
+        try {
+            return getDatabase().prepareStatement(sql);
+        } finally {
+            releaseNonExclusiveLock();
+        }
     }
 
     /**
