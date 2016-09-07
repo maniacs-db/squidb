@@ -266,7 +266,7 @@ public abstract class SquidDatabase {
 
     private static final int STRING_BUILDER_INITIAL_CAPACITY = 128;
 
-    private final PreparedInsertCache preparedInsertCache = new PreparedInsertCache();
+    private ThreadLocal<PreparedInsertCache> preparedInsertCache = newPreparedInsertCache();
     private boolean fastInsertEnabled = false;
 
     private SquidDatabase attachedTo = null;
@@ -467,6 +467,15 @@ public abstract class SquidDatabase {
         fastInsertEnabled = enabled;
     }
 
+    private ThreadLocal<PreparedInsertCache> newPreparedInsertCache() {
+        return new ThreadLocal<PreparedInsertCache>() {
+            @Override
+            protected PreparedInsertCache initialValue() {
+                return new PreparedInsertCache();
+            }
+        };
+    }
+
     /**
      * Attaches another database to this database using the SQLite ATTACH command. This locks the other database
      * exclusively; you must call {@link #detachDatabase(SquidDatabase)} when you are done, otherwise the attached
@@ -657,8 +666,8 @@ public abstract class SquidDatabase {
     }
 
     private void closeAndDeleteInternal(boolean deleteAfterClose) {
+        preparedInsertCache = newPreparedInsertCache();
         if (isOpen()) {
-            preparedInsertCache.invalidateAll();
             database.close();
         }
         setDatabase(null);
@@ -1876,8 +1885,9 @@ public abstract class SquidDatabase {
         if (fastInsertEnabled) {
             acquireNonExclusiveLock();
             try {
+                PreparedInsertCache insertCache = preparedInsertCache.get();
                 ISQLitePreparedStatement preparedStatement =
-                        preparedInsertCache.getPreparedInsert(this, table, conflictAlgorithm);
+                        insertCache.getPreparedInsert(this, table, conflictAlgorithm);
                 item.bindValuesForInsert(table, preparedStatement);
                 newRow = preparedStatement.executeInsert();
             } finally {
