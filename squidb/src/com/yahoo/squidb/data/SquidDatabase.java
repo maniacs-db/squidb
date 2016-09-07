@@ -29,6 +29,7 @@ import com.yahoo.squidb.utility.VersionCode;
 
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.Deque;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -36,6 +37,7 @@ import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 /**
@@ -266,7 +268,9 @@ public abstract class SquidDatabase {
 
     private static final int STRING_BUILDER_INITIAL_CAPACITY = 128;
 
-    private ThreadLocal<PreparedInsertCache> preparedInsertCache = newPreparedInsertCache();
+    private Set<ISQLitePreparedStatement> trackedPreparedInserts = Collections.newSetFromMap(
+            new ConcurrentHashMap<ISQLitePreparedStatement, Boolean>());
+    private ThreadLocal<PreparedInsertCache> preparedInsertCache = newPreparedInsertCache(trackedPreparedInserts);
     private boolean fastInsertEnabled = false;
 
     private SquidDatabase attachedTo = null;
@@ -467,11 +471,12 @@ public abstract class SquidDatabase {
         fastInsertEnabled = enabled;
     }
 
-    private ThreadLocal<PreparedInsertCache> newPreparedInsertCache() {
+    private ThreadLocal<PreparedInsertCache> newPreparedInsertCache(
+            final Set<ISQLitePreparedStatement> openStatementTracking) {
         return new ThreadLocal<PreparedInsertCache>() {
             @Override
             protected PreparedInsertCache initialValue() {
-                return new PreparedInsertCache();
+                return new PreparedInsertCache(openStatementTracking);
             }
         };
     }
@@ -666,7 +671,7 @@ public abstract class SquidDatabase {
     }
 
     private void closeAndDeleteInternal(boolean deleteAfterClose) {
-        preparedInsertCache = newPreparedInsertCache();
+        clearPreparedStatementCache();
         if (isOpen()) {
             database.close();
         }
@@ -675,6 +680,14 @@ public abstract class SquidDatabase {
             getOpenHelper().deleteDatabase();
         }
         helper = null;
+    }
+
+    private void clearPreparedStatementCache() {
+        for (ISQLitePreparedStatement statement : trackedPreparedInserts) {
+            statement.close();
+        }
+        trackedPreparedInserts.clear();
+        preparedInsertCache = newPreparedInsertCache(trackedPreparedInserts);
     }
 
     /**
