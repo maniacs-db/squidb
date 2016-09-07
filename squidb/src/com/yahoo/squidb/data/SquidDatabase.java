@@ -266,6 +266,8 @@ public abstract class SquidDatabase {
 
     private static final int STRING_BUILDER_INITIAL_CAPACITY = 128;
 
+    private final PreparedInsertCache preparedInsertCache = new PreparedInsertCache();
+
     private SquidDatabase attachedTo = null;
     private final ReentrantReadWriteLock readWriteLock = new ReentrantReadWriteLock();
     private final Object databaseInstanceLock = new Object();
@@ -646,6 +648,7 @@ public abstract class SquidDatabase {
 
     private void closeAndDeleteInternal(boolean deleteAfterClose) {
         if (isOpen()) {
+            preparedInsertCache.invalidateAll();
             database.close();
         }
         setDatabase(null);
@@ -1849,15 +1852,18 @@ public abstract class SquidDatabase {
     protected final boolean insertRow(TableModel item, TableStatement.ConflictAlgorithm conflictAlgorithm) {
         Class<? extends TableModel> modelClass = item.getClass();
         Table table = getTable(modelClass);
-        ValuesStorage mergedValues = item.getMergedValues();
-        if (mergedValues.size() == 0) {
-            return false;
+
+        long newRow;
+        acquireNonExclusiveLock();
+        try {
+            ISQLitePreparedStatement preparedStatement =
+                    preparedInsertCache.getPreparedInsert(this, table, conflictAlgorithm);
+            item.bindValuesForInsert(table, preparedStatement);
+            newRow = preparedStatement.executeInsert();
+        } finally {
+            releaseNonExclusiveLock();
         }
-        Insert insert = Insert.into(table).fromValues(mergedValues);
-        if (conflictAlgorithm != null) {
-            insert.onConflict(conflictAlgorithm);
-        }
-        long newRow = insertInternal(insert);
+
         boolean result = newRow > 0;
         if (result) {
             notifyForTable(DataChangedNotifier.DBOperation.INSERT, item, table, newRow);
@@ -1865,6 +1871,18 @@ public abstract class SquidDatabase {
             item.markSaved();
         }
         return result;
+    }
+
+    private long insertRowLegacy(TableModel item, Table table, TableStatement.ConflictAlgorithm conflictAlgorithm) {
+        ValuesStorage mergedValues = item.getMergedValues();
+        if (mergedValues.size() == 0) {
+            return -1;
+        }
+        Insert insert = Insert.into(table).fromValues(mergedValues);
+        if (conflictAlgorithm != null) {
+            insert.onConflict(conflictAlgorithm);
+        }
+        return insertInternal(insert);
     }
 
     /**
